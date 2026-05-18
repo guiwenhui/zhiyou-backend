@@ -2,11 +2,17 @@ package com.hmdp.config;
 
 import cn.hutool.json.JSONUtil;
 import com.hmdp.dto.Result;
+import com.hmdp.entity.Blog;
+import com.hmdp.service.IBlogService;
 import com.hmdp.service.IShopService;
 import com.hmdp.service.IVoucherOrderService;
+import com.hmdp.utils.UserHolder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Description;
+import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.InMemoryChatMemory;
 
 import jakarta.annotation.Resource;
 import java.util.function.Function;
@@ -14,8 +20,21 @@ import java.util.function.Function;
 @Configuration
 public class AgentToolsConfig {
 
+    @Bean
+    public ChatMemory chatMemory() {
+        return new InMemoryChatMemory();
+    }
+
+    @Bean
+    public ChatClient chatClient(ChatClient.Builder builder) {
+        return builder.build();
+    }
+
     @Resource
     private IShopService shopService;
+
+    @Resource
+    private IBlogService blogService;
 
     @Resource
     private IVoucherOrderService voucherOrderService;
@@ -23,6 +42,7 @@ public class AgentToolsConfig {
     // 1. 定义入参 Record 类 (必须是确定的结构)
     public record ShopQueryRequest(Integer typeId, Double x, Double y) {}
     public record SeckillRequest(Long voucherId) {}
+    public record PublishBlogRequest(String content, String images, Long shopId) {}
 
     // 2. 注册查询附近商户的 Tool
     @Bean
@@ -52,6 +72,29 @@ public class AgentToolsConfig {
                         "抢券失败，原因：" + result.getErrorMsg();
             } catch (Exception e) {
                 return "抢券系统繁忙，请稍后再试。";
+            }
+        };
+    }
+
+    @Bean
+    @Description("发布探店日记工具。当用户要求写探店日记并发布时调用。你需要先构思好高质量内容并排版，然后调用此工具。")
+    public Function<PublishBlogRequest, String> publishBlog() {
+        return request -> {
+            try {
+                // 注意：由于 AI 回调 Tool 时可能丢失 ThreadLocal 上下文，
+                // 如果这里 UserHolder 拿不到 ID，需要将 UserId 设计到 PublishBlogRequest 参数中让大模型回传。
+                Long userId = UserHolder.getUser().getId();
+
+                Blog blog = new Blog();
+                blog.setUserId(userId);
+                blog.setShopId(request.shopId());
+                blog.setContent(request.content());
+                blog.setImages(request.images() != null ? request.images() : "");
+
+                blogService.saveBlog(blog);
+                return "探店笔记发布成功！";
+            } catch (Exception e) {
+                return "发布失败：" + e.getMessage();
             }
         };
     }
