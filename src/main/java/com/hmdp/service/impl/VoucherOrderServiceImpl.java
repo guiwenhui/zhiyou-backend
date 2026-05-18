@@ -21,8 +21,8 @@ import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
-import javax.annotation.PostConstruct;
-import javax.annotation.Resource;
+import jakarta.annotation.PostConstruct;
+import jakarta.annotation.Resource;
 import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
@@ -71,11 +71,29 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
 
     @PostConstruct
     private void init() {
+        // 确保 stream 和消费者组存在，防止 handler 启动时报 pending-list 异常
+        try {
+            // 先用 MKSTREAM 确保 stream 存在，再创建消费者组
+            stringRedisTemplate.opsForStream().createGroup("stream.orders", ReadOffset.from("0"), "g1");
+            log.info("Redis Stream 消费者组 g1 创建成功");
+        } catch (Exception e) {
+            String msg = e.getMessage();
+            if (msg != null && msg.contains("BUSYGROUP")) {
+                // 消费者组已存在，正常情况
+                log.debug("消费者组 g1 已存在，跳过创建");
+            } else {
+                log.warn("Stream 初始化异常，将在 handler 中重试: {}", msg);
+            }
+        }
         SECKILL_ORDER_EXECUTOR.submit(new VoucherOrderHandler());
     }
 
     private class VoucherOrderHandler implements Runnable {
         String queueName = "stream.orders";
+        // 连续失败计数，用于指数退避
+        private int consecutiveErrors = 0;
+        private static final int MAX_BACKOFF_SECONDS = 60;
+
         @Override
         public void run() {
             while (true) {
@@ -86,6 +104,8 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                             StreamReadOptions.empty().count(1).block(Duration.ofSeconds(2)),
                             StreamOffset.create(queueName, ReadOffset.lastConsumed())
                     );
+                    // 读取成功，重置错误计数
+                    consecutiveErrors = 0;
                     // 判断消息是否获取成功
                     if (list == null || list.isEmpty()) {
                         // 否，进入下一次循环
@@ -100,13 +120,27 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     // ACK确认 SACK stream.orders g1 *
                     stringRedisTemplate.opsForStream().acknowledge(queueName, "g1" , record.getId());
                 } catch (Exception e) {
-                    log.error("订单处理异常", e);
+                    consecutiveErrors++;
+                    // 只在第一次和每隔10次打印完整错误，避免日志爆炸
+                    if (consecutiveErrors == 1 || consecutiveErrors % 10 == 0) {
+                        log.error("订单处理异常 (连续第{}次)", consecutiveErrors, e);
+                    }
                     handlePendingList();
+                    // 指数退避：2^n 秒，上限60秒
+                    int backoffSeconds = Math.min(1 << Math.min(consecutiveErrors, 6), MAX_BACKOFF_SECONDS);
+                    try {
+                        Thread.sleep(backoffSeconds * 1000L);
+                    } catch (InterruptedException ex) {
+                        Thread.currentThread().interrupt();
+                        return;
+                    }
                 }
             }
         }
 
         private void handlePendingList() {
+            int retryCount = 0;
+            final int MAX_RETRIES = 3;
             while (true) {
                 try {
                     //1. 获取pending-list中的订单信息 XREADGROUP GROUP g1 c1 COUNT 1 BLOCK 2000 STREAMS stream.orders 0
@@ -127,13 +161,20 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
                     handleVoucherOrder(voucherOrder);
                     //5. 手动ACK，SACK stream.orders g1 id
                     stringRedisTemplate.opsForStream().acknowledge(queueName, "g1", record.getId());
+                    // 处理成功，重置重试计数
+                    retryCount = 0;
                 } catch (Exception e) {
-                    log.info("处理pending-list异常");
-                    //如果怕异常多次出现，可以在这里休眠一会儿
+                    retryCount++;
+                    if (retryCount >= MAX_RETRIES) {
+                        log.warn("处理pending-list连续失败{}次，退出重试", retryCount);
+                        break;
+                    }
+                    log.info("处理pending-list异常，第{}次重试", retryCount);
                     try {
-                        Thread.sleep(50);
+                        Thread.sleep(1000);
                     } catch (InterruptedException ex) {
-                        throw new RuntimeException(ex);
+                        Thread.currentThread().interrupt();
+                        break;
                     }
                 }
             }
@@ -222,7 +263,7 @@ public class VoucherOrderServiceImpl extends ServiceImpl<VoucherOrderMapper, Vou
         Long userId = voucherOrder.getUserId();
         Long voucherId = voucherOrder.getVoucherId();
         synchronized (userId.toString().intern()) {
-            int count = query().eq("voucher_id", voucherId).eq("user_id", userId).count();
+            Long count = query().eq("voucher_id", voucherId).eq("user_id", userId).count();
             if (count > 0) {
                 log.error("你已经抢过优惠券了哦");
                 return;
