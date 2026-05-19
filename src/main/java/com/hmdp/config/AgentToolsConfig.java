@@ -3,10 +3,7 @@ package com.hmdp.config;
 import cn.hutool.json.JSONUtil;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Blog;
-import com.hmdp.service.IAgentService;
-import com.hmdp.service.IBlogService;
-import com.hmdp.service.IShopService;
-import com.hmdp.service.IVoucherOrderService;
+import com.hmdp.service.*;
 import com.hmdp.utils.UserHolder;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -42,11 +39,15 @@ public class AgentToolsConfig {
     @Resource
     private IVoucherOrderService voucherOrderService;
 
+    @Resource
+    private IVoucherService voucherService;
+
     // 1. 定义入参 Record 类 (必须是确定的结构)
     public record ShopQueryRequest(Integer typeId, Double x, Double y) {}
     public record SeckillRequest(Long voucherId) {}
     public record PublishBlogRequest(String content, String images, Long shopId) {}
     public record ShopReviewRequest(Long shopId) {}
+    public record VoucherQueryRequest(Long shopId) {}
 
     // 2. 注册查询附近商户的 Tool
     @Bean
@@ -112,6 +113,22 @@ public class AgentToolsConfig {
                 return agentService.getShopReviewSummary(request.shopId());
             } catch (Exception e) {
                 return "获取商户评价摘要失败，请稍后再试。";
+            }
+        };
+    }
+
+    @Bean
+    @Description("查询指定商铺优惠券/代金券的工具。当用户在规划行程中需要知道某家店是否有优惠券可抢时调用。必须传入商铺的 shopId。")
+    public Function<VoucherQueryRequest, String> queryVoucher() {
+        return request -> {
+            try {
+                Result result = voucherService.queryVoucherOfShop(request.shopId());
+                if (result.getSuccess() && result.getData() != null) {
+                    return JSONUtil.toJsonStr(result.getData());
+                }
+                return "查询失败，暂无数据";
+            } catch (Exception e) {
+                return "查询失败，请稍后再试。";
             }
         };
     }

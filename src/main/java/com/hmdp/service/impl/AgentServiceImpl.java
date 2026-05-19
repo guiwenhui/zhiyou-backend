@@ -66,7 +66,9 @@ public class AgentServiceImpl implements IAgentService {
                     // 注册工具
                     .functions(
                             "queryNearbyShops",
-                            "seckillVoucher"
+                            "seckillVoucher",
+                            "publishBlog",
+                            "queryVoucher"
                     )
 
                     .call()
@@ -90,7 +92,7 @@ public class AgentServiceImpl implements IAgentService {
                     // 绑定记忆功能，使用userId 作为会话的唯一标识，保留最近10条会话
                     .advisors(new MessageChatMemoryAdvisor(chatMemory, userId.toString(), 10))
                     // 声明该 Agent 可以使用的方法（名称必须与 AgentToolsConfig 中的 Bean 名称一致）
-                    .functions("queryNearbyShops", "seckillVoucher", "publishBlog")
+                    .functions("queryNearbyShops", "seckillVoucher", "publishBlog","queryVoucher")
                     .stream()
                     .content();
         } catch (Exception e) {
