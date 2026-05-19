@@ -3,6 +3,7 @@ package com.hmdp.config;
 import cn.hutool.json.JSONUtil;
 import com.hmdp.dto.Result;
 import com.hmdp.entity.Blog;
+import com.hmdp.service.IAgentService;
 import com.hmdp.service.IBlogService;
 import com.hmdp.service.IShopService;
 import com.hmdp.service.IVoucherOrderService;
@@ -15,6 +16,8 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.InMemoryChatMemory;
 
 import jakarta.annotation.Resource;
+import org.springframework.context.annotation.Lazy;
+
 import java.util.function.Function;
 
 @Configuration
@@ -43,6 +46,7 @@ public class AgentToolsConfig {
     public record ShopQueryRequest(Integer typeId, Double x, Double y) {}
     public record SeckillRequest(Long voucherId) {}
     public record PublishBlogRequest(String content, String images, Long shopId) {}
+    public record ShopReviewRequest(Long shopId) {}
 
     // 2. 注册查询附近商户的 Tool
     @Bean
@@ -95,6 +99,19 @@ public class AgentToolsConfig {
                 return "探店笔记发布成功！";
             } catch (Exception e) {
                 return "发布失败：" + e.getMessage();
+            }
+        };
+    }
+
+    @Bean
+    @Description("这是一个商户评价与舆情分析工具。当用户询问某家店铺的评价、口碑、大家怎么说、环境怎样、值得去吗等问题时调用此工具。必须传入商户的 shopId。")
+    public Function<ShopReviewRequest, String> analyzeShopReviews(@Lazy IAgentService agentService) {
+        return request -> {
+            try {
+                // 委托给 Service 层处理 RAG 检索与总结逻辑
+                return agentService.getShopReviewSummary(request.shopId());
+            } catch (Exception e) {
+                return "获取商户评价摘要失败，请稍后再试。";
             }
         };
     }

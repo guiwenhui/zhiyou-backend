@@ -8,4 +8,6 @@ public interface IAgentService {
 
 
     Flux<String> chatStream(String message, Long userId);
+
+    String getShopReviewSummary(Long shopId);
 }
